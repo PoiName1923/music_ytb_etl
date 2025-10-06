@@ -1,0 +1,14 @@
+# Sử dụng hình ảnh Selenium Hub chính thức
+FROM selenium/hub:4.35.0
+
+# Thiết lập các biến môi trường cho Hub
+ENV GRID_MAX_SESSION=16
+ENV GRID_BROWSER_TIMEOUT=300
+ENV GRID_TIMEOUT=300
+
+# Mở các cổng cần thiết
+EXPOSE 4444 4442 4443
+
+# Healthcheck cho Hub
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD curl -f http://localhost:4444/wd/hub/status || exit 1 

@@ -1,0 +1,262 @@
+# ======================== AIRFLOW ENV ========================
+x-airflow-common-env: &airflow-common-env
+  AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/1
+  AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/app/_airflow/dags
+  PYTHONPATH: /opt/airflow/app
+
+# ===========================================================
+services:
+# ======================== SELENIUM ========================
+  selenium-hub:
+    build:
+      context: ./services/_selenium/
+      dockerfile: dockerfile.hub
+    container_name: selenium-hub
+    ports:
+      - "4444:4444"
+      - "4442:4442"
+      - "4443:4443"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4444/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  chrome:
+    build:  
+      context: ./services/_selenium/
+      dockerfile: dockerfile.chrome
+    container_name: sl-node-chrome
+    ports:
+      - "5900:5900"
+    depends_on:
+      selenium-hub:
+        condition: service_healthy
+    volumes:
+      - ./data/selenium/dev/shm:/dev/shm
+    networks:
+      - app-network
+      
+# ======================== MONGO ========================
+  mongo:
+    image: mongo:latest
+    container_name: mongo
+    restart: on-failure
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ADMIN_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ADMIN_PASSWORD}
+      MONGO_INITDB_DATABASES: '[{"db":"${MONGO_DB_TRENDING_YTB_VIDEOS}","collections":["${MONGO_COLL_SES_TRENDING_VIDEOS}","${MONGO_COLL_UNIQUE_VIDEOS}","${MONGO_COLL_UNIQUE_CHANNELS}"]}]'
+    
+    volumes:
+      - ./data/mongo:/data/db
+      - ./services/_mongo/init-db.js:/docker-entrypoint-initdb.d/init-db.js:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo-express
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      # To connect with mongodb
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: true
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ADMIN_USER}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ADMIN_PASSWORD}
+      # To login mongo express
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD}
+
+    depends_on:
+      mongo:
+        condition: service_healthy
+        
+    networks:
+      - app-network
+# ======================== MINIO ========================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./data/minio:/data
+    networks:
+      - app-network
+# ======================== POSTGRES ========================
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    environment:
+      # User and database for airflow
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      # User and database for ETL
+      - POSTGRES_USER_ETL=${POSTGRES_USER_ETL}
+      - POSTGRES_PASSWORD_ETL=${POSTGRES_PASSWORD_ETL}
+      - POSTGRES_DB_ETL=${POSTGRES_DB_ETL}
+      - POSTGRES_SCHEMA_ETL=${POSTGRES_SCHEMA_ETL}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./services/_postgres/init-dbs.sh:/docker-entrypoint-initdb.d/init-dbs.sh
+      - ./services/_postgres/init-schema.sql:/docker-entrypoint-initdb.d/scripts/init-schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+  adminer:
+    image: adminer
+    container_name: admin
+    restart: always
+    ports:
+      - 8082:8080
+    networks:
+      - app-network
+# ======================== AIRFLOW ========================
+  redis:
+    image: redis:6.2
+    container_name: airflow_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+      
+  airflow-init:
+    build:
+      context: ./services/_airflow/
+      dockerfile: dockerfile.airflow
+    container_name: airflow_init
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      <<: *airflow-common-env
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create --username ${AIRFLOW_USER_ADMIN} --password ${AIRFLOW_PASSWORD_ADMIN} --firstname ${AIRFLOW_FIRSTNAME} --lastname ${AIRFLOW_LASTNAME} --role Admin --email ${AIRFLOW_EMAIL}
+      "
+    networks:
+      - app-network
+
+  airflow-worker:
+    build:
+      context: ./services/_airflow/
+      dockerfile: dockerfile.airflow
+    container_name: airflow_worker
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./services:/opt/airflow/app
+      - ./logs/airflow:/opt/airflow/logs
+      - ./.env:/opt/airflow/app/.env
+    environment:
+      <<: *airflow-common-env 
+    command: airflow celery worker
+    networks:
+      - app-network
+
+  airflow-webserver:
+    build:
+      context: ./services/_airflow/
+      dockerfile: dockerfile.airflow
+    container_name: airflow_webserver
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./services:/opt/airflow/app
+      - ./logs/airflow:/opt/airflow/logs
+      - ./.env:/opt/airflow/app/.env
+    environment:
+      <<: *airflow-common-env
+    command: airflow webserver
+    networks:
+      - app-network
+
+  airflow-scheduler:
+    build:
+      context: ./services/_airflow/
+      dockerfile: dockerfile.airflow
+    container_name: airflow_scheduler
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./services:/opt/airflow/app
+      - ./logs/airflow:/opt/airflow/logs
+      - ./.env:/opt/airflow/app/.env
+    environment:
+      <<: *airflow-common-env
+    command: airflow scheduler
+    networks:
+      - app-network
+
+# =============== NETWORK ===============
+networks:
+  app-network:
+    driver: bridge
+# =============== VOLUMES ===============
+volumes:
+  data:
+  logs:

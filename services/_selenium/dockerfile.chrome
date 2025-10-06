@@ -1,0 +1,17 @@
+# Sử dụng hình ảnh Selenium Chrome Node Debug chính thức
+FROM selenium/node-chrome:latest
+
+# Thiết lập các biến môi trường cho Chrome Node
+ENV SE_EVENT_BUS_HOST=selenium-hub
+ENV SE_EVENT_BUS_PUBLISH_PORT=4442
+ENV SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+ENV SE_NODE_MAX_SESSIONS=4
+ENV SE_NODE_SESSION_TIMEOUT=300
+ENV SE_VNC_ENABLED=true
+
+# Gắn kết /dev/shm để tránh lỗi bộ nhớ
+VOLUME /dev/shm
+
+# Healthcheck cho Chrome Node
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD curl -f http://localhost:5555/wd/hub/status || exit 1

@@ -1,0 +1,22 @@
+# Sử dụng hình ảnh chính thức của Apache Airflow
+FROM apache/airflow:2.8.0-python3.11
+
+# Chuyển sang người dùng root để cài đặt các gói hệ thống
+USER root
+
+# Cài đặt các gói hệ thống cần thiết
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    nano \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Chuyển về người dùng airflow
+USER airflow
+
+# Cài đặt các gói Python bổ sung
+COPY requirements.txt /
+RUN pip install --no-cache-dir -r /requirements.txt
+
+# Cổng Airflow Webserver mặc định
+EXPOSE 8080

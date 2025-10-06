@@ -1,0 +1,10 @@
+selenium
+webdriver-manager
+pymongo
+ytmusicapi
+dotenv
+minio
+pandas
+pyarrow
+connexion[swagger-ui]
+psycopg2-binary
